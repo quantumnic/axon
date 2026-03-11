@@ -159,6 +159,12 @@ enum Commands {
     Contradictions,
     /// Generate default config at ~/.axon/config.toml
     Init,
+    /// Batch-feed URLs from ~/.axon/sources.txt
+    Train {
+        /// Path to sources file (one URL per line)
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
     /// Launch HTTP API server
     Serve {
         /// Port to listen on
@@ -720,6 +726,67 @@ async fn main() -> anyhow::Result<()> {
         Commands::Contradictions => {
             let results = contradiction::detect_contradictions(&brain)?;
             print!("{}", contradiction::format_contradictions(&results));
+        }
+        Commands::Train { file } => {
+            let default_path = dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".axon")
+                .join("sources.txt");
+            let sources_path = file.unwrap_or(default_path);
+            if !sources_path.exists() {
+                eprintln!(
+                    "❌ Sources file not found: {}\n   Create it with one URL per line.",
+                    sources_path.display()
+                );
+                std::process::exit(1);
+            }
+            let content = std::fs::read_to_string(&sources_path)?;
+            let urls: Vec<&str> = content
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .collect();
+            println!("📚 Training from {} ({} URLs)...\n", sources_path.display(), urls.len());
+            let mut total_entities = 0u64;
+            let mut total_relations = 0u64;
+            let mut total_facts = 0u64;
+            let mut errors = 0u64;
+            for url in &urls {
+                print!("  🧠 {url} ... ");
+                match crawler::fetch_and_extract(url).await {
+                    Ok(text) => {
+                        let extracted = nlp::process_text(&text, url);
+                        match brain.learn(&extracted) {
+                            Ok((e, r, f)) => {
+                                println!("{e} entities, {r} relations, {f} facts");
+                                total_entities += e as u64;
+                                total_relations += r as u64;
+                                total_facts += f as u64;
+                            }
+                            Err(err) => {
+                                println!("❌ learn error: {err}");
+                                errors += 1;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        println!("❌ fetch error: {err}");
+                        errors += 1;
+                    }
+                }
+            }
+            println!("\n✅ Training complete!");
+            println!("   Sources: {}", urls.len());
+            println!("   Learned: {total_entities} entities, {total_relations} relations, {total_facts} facts");
+            if errors > 0 {
+                println!("   Errors:  {errors}");
+            }
+            // Print current stats
+            let stats = brain.stats()?;
+            println!("\n📊 Brain after training:");
+            println!("   Total entities:  {}", stats.entity_count);
+            println!("   Total relations: {}", stats.relation_count);
+            println!("   Total facts:     {}", stats.fact_count);
         }
         Commands::Init => unreachable!(),
         Commands::Serve { port } => {
