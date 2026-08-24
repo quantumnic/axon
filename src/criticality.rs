@@ -1418,13 +1418,52 @@ fn explain_entity_prominence(
     let degree = rels.len();
     let fact_count = facts.len();
 
+    // Build the reasoning chain from the entity's strongest relations
+    let mut reasoning_chain: Vec<ExplanationStep> = rels
+        .iter()
+        .take(5)
+        .map(|(subj, pred, obj, conf)| {
+            // Relations are returned regardless of direction; anchor the
+            // step on the explained entity
+            let other_name = if subj == name {
+                obj.as_str()
+            } else {
+                subj.as_str()
+            };
+            ExplanationStep {
+                entity_id,
+                entity_name: name.to_string(),
+                predicate: pred.clone(),
+                target_id: 0,
+                target_name: other_name.to_string(),
+                confidence: *conf,
+            }
+        })
+        .collect();
+
+    // Fall back to facts when the entity has no relations
+    if reasoning_chain.is_empty() {
+        reasoning_chain.extend(facts.iter().take(5).map(|f| ExplanationStep {
+            entity_id,
+            entity_name: name.to_string(),
+            predicate: f.key.clone(),
+            target_id: 0,
+            target_name: f.value.clone(),
+            confidence: f.confidence,
+        }));
+    }
+
+    if reasoning_chain.is_empty() {
+        return Ok(None);
+    }
+
     let summary = format!(
         "{} has {} connections and {} facts, making it a well-connected knowledge hub",
         name, degree, fact_count
     );
 
     Ok(Some(Explanation {
-        reasoning_chain: vec![],
+        reasoning_chain,
         parsimony_score: 0.9,
         coverage_score: (degree as f64 / 10.0).min(1.0),
         consistency_score: 0.9,
@@ -3122,7 +3161,7 @@ mod tests {
         let brain = populated_brain();
         let cdp = critical_discovery_parameter(&brain).unwrap();
         // CDP should be a finite number in [-1, 1]
-        assert!(cdp >= -1.0 && cdp <= 1.0, "CDP={} out of range", cdp);
+        assert!((-1.0..=1.0).contains(&cdp), "CDP={} out of range", cdp);
     }
 
     #[test]
@@ -3142,14 +3181,14 @@ mod tests {
         brain.upsert_relation(a, "linked", b, "test").unwrap();
         brain.upsert_relation(b, "linked", c, "test").unwrap();
         let surprise = surprise_edge_fraction(&brain).unwrap();
-        assert!(surprise >= 0.0 && surprise <= 1.0);
+        assert!((0.0..=1.0).contains(&surprise));
     }
 
     #[test]
     fn test_surprise_edge_fraction_populated() {
         let brain = populated_brain();
         let surprise = surprise_edge_fraction(&brain).unwrap();
-        assert!(surprise >= 0.0 && surprise <= 1.0);
+        assert!((0.0..=1.0).contains(&surprise));
     }
 
     #[test]
@@ -3164,9 +3203,11 @@ mod tests {
     fn test_avalanche_detection_with_graph() {
         let brain = populated_brain();
         let (sizes, _gamma, _is_pl) = avalanche_detection(&brain).unwrap();
-        // Should get some estimates from graph structure
-        // May or may not have sizes depending on graph properties
-        assert!(sizes.len() >= 0);
+        // Should get some estimates from graph structure; any reported
+        // avalanche size must be a positive cascade size
+        for s in &sizes {
+            assert!(*s > 0);
+        }
     }
 
     #[test]
@@ -3174,11 +3215,8 @@ mod tests {
         let brain = test_brain();
         record_avalanche(&brain, Some(1), 5, 3).unwrap();
         record_avalanche(&brain, Some(2), 12, 4).unwrap();
-
-        let (sizes, _, _) = avalanche_detection(&brain).unwrap();
-        // Should have our recorded avalanches
-        // Note: with < 3 entries it falls through to estimation
-        // So record 3+
+        // With < 3 entries detection falls through to estimation,
+        // so record 3+
         record_avalanche(&brain, Some(3), 3, 2).unwrap();
         let (sizes, _gamma, _) = avalanche_detection(&brain).unwrap();
         assert!(sizes.len() >= 3);
@@ -3198,7 +3236,7 @@ mod tests {
         let report = criticality_report(&brain).unwrap();
         assert!(report.structural_entropy > 0.0);
         assert!(report.semantic_entropy > 0.0);
-        assert!(report.cdp >= -1.0 && report.cdp <= 1.0);
+        assert!((-1.0..=1.0).contains(&report.cdp));
         assert!(!report.recommendation.is_empty());
     }
 
@@ -3243,8 +3281,13 @@ mod tests {
     fn test_abduce_single_entity() {
         let brain = populated_brain();
         let hypothesis = abduce(&brain, "Isaac Newton").unwrap();
-        // Should find entity prominence explanation
-        assert!(hypothesis.candidate_explanations.len() >= 0);
+        // Whatever explanations are produced must be well-formed
+        for e in &hypothesis.candidate_explanations {
+            assert!(!e.reasoning_chain.is_empty());
+            for step in &e.reasoning_chain {
+                assert!((0.0..=1.0).contains(&step.confidence));
+            }
+        }
     }
 
     #[test]
@@ -3342,7 +3385,7 @@ mod tests {
         let brain = populated_brain();
         let score = temporal_causality(&brain, "Isaac Newton", "physics").unwrap();
         // Should be some positive value
-        assert!(score >= 0.0 && score <= 1.0);
+        assert!((0.0..=1.0).contains(&score));
     }
 
     #[test]
@@ -3359,7 +3402,7 @@ mod tests {
         // physics has many relations, should get a prediction
         if let Some(p) = pred {
             assert!(p.avg_interval_hours >= 0.0);
-            assert!(p.confidence >= 0.0 && p.confidence <= 1.0);
+            assert!((0.0..=1.0).contains(&p.confidence));
         }
     }
 
@@ -3397,7 +3440,7 @@ mod tests {
         let brain = populated_brain();
         let (gamma, r2, assessment) = scale_free_score(&brain).unwrap();
         assert!(gamma >= 0.0);
-        assert!(r2 >= 0.0 && r2 <= 1.0);
+        assert!((0.0..=1.0).contains(&r2));
         assert!(!assessment.is_empty());
     }
 
@@ -3442,8 +3485,11 @@ mod tests {
     fn test_topology_steering_recommendations_empty() {
         let brain = test_brain();
         let recs = topology_steering_recommendations(&brain).unwrap();
-        // May or may not have recommendations for empty graph
-        assert!(recs.len() >= 0);
+        // Any recommendation for an empty graph must still be well-formed
+        for r in &recs {
+            assert!(!r.recommendation.is_empty());
+            assert!((1..=3).contains(&r.priority));
+        }
     }
 
     #[test]
@@ -3546,7 +3592,7 @@ mod tests {
         let mc = introspect(&brain).unwrap();
         assert!(mc.entity_count > 0);
         assert!(mc.relation_count > 0);
-        assert!(mc.domain_balance >= 0.0 && mc.domain_balance <= 1.0);
+        assert!((0.0..=1.0).contains(&mc.domain_balance));
         assert!(!mc.recommendations.is_empty());
     }
 
@@ -3579,7 +3625,7 @@ mod tests {
 
     #[test]
     fn test_shannon_entropy_uniform() {
-        let counts = vec![10, 10, 10, 10];
+        let counts = [10, 10, 10, 10];
         let entropy = shannon_entropy_from_counts(counts.iter());
         assert!(
             (entropy - 2.0).abs() < 0.01,
@@ -3590,7 +3636,7 @@ mod tests {
 
     #[test]
     fn test_shannon_entropy_single() {
-        let counts = vec![100];
+        let counts = [100];
         let entropy = shannon_entropy_from_counts(counts.iter());
         assert_eq!(entropy, 0.0, "Single category should have 0 entropy");
     }
@@ -3632,7 +3678,7 @@ mod tests {
     #[test]
     fn test_fit_power_law_trivial() {
         let sizes = vec![1, 2, 4, 8, 16, 32];
-        let (gamma, r2) = fit_power_law(&sizes);
+        let (gamma, _r2) = fit_power_law(&sizes);
         assert!(gamma > 0.0, "Power law exponent should be positive");
         // Not perfect power law but should get some fit
     }
@@ -3656,7 +3702,7 @@ mod tests {
     fn test_linear_r_squared_random() {
         let points: Vec<(f64, f64)> = vec![(1.0, 5.0), (2.0, 1.0), (3.0, 7.0), (4.0, 2.0)];
         let r2 = linear_r_squared(&points);
-        assert!(r2 >= 0.0 && r2 <= 1.0);
+        assert!((0.0..=1.0).contains(&r2));
     }
 
     #[test]
@@ -3693,9 +3739,9 @@ mod tests {
 
     #[test]
     fn test_tridiagonal_eigenvalues_single() {
-        let eigenvalues = tridiagonal_eigenvalues(&[3.14], &[]);
+        let eigenvalues = tridiagonal_eigenvalues(&[std::f64::consts::PI], &[]);
         assert_eq!(eigenvalues.len(), 1);
-        assert!((eigenvalues[0] - 3.14).abs() < 1e-10);
+        assert!((eigenvalues[0] - std::f64::consts::PI).abs() < 1e-10);
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -3728,7 +3774,7 @@ mod tests {
         assert!(sem >= 0.0);
 
         let surprise = surprise_edge_fraction(&brain).unwrap();
-        assert!(surprise >= 0.0 && surprise <= 1.0);
+        assert!((0.0..=1.0).contains(&surprise));
     }
 
     #[test]

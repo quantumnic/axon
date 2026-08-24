@@ -383,12 +383,11 @@ fn infer_predicate(
             }
         }
         // person-concept refinement via shared technology neighbors
-        if (a_norm == "person" && b_norm == "concept")
-            || (a_norm == "concept" && b_norm == "person")
+        if ((a_norm == "person" && b_norm == "concept")
+            || (a_norm == "concept" && b_norm == "person"))
+            && snt.get("technology").copied().unwrap_or(0) > 0
         {
-            if snt.get("technology").copied().unwrap_or(0) > 0 {
-                return "pioneered";
-            }
+            return "pioneered";
         }
     }
 
@@ -1611,7 +1610,7 @@ impl HypothesisStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s {
             "testing" => Self::Testing,
             "confirmed" => Self::Confirmed,
@@ -1658,7 +1657,7 @@ impl PatternType {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s {
             "co_occurrence" => Self::CoOccurrence,
             "structural_hole" => Self::StructuralHole,
@@ -4185,7 +4184,7 @@ impl<'a> Prometheus<'a> {
         }
 
         let mut boosted = 0usize;
-        for (_pair, entries) in &by_pair {
+        for entries in by_pair.values() {
             // Count distinct strategies
             let strategies: HashSet<&str> = entries.iter().map(|e| e.2.as_str()).collect();
             if strategies.len() < 2 {
@@ -7626,10 +7625,11 @@ impl<'a> Prometheus<'a> {
                         // Signal 3: Same entity type + high degree (well-established entities)
                         let s_rels = self.brain.get_relations_for(s_ent.id)?;
                         let o_rels = self.brain.get_relations_for(o_ent.id)?;
-                        if s_ent.entity_type == o_ent.entity_type {
-                            if s_rels.len() >= 3 && o_rels.len() >= 3 {
-                                evidence_score += 0.05;
-                            }
+                        if s_ent.entity_type == o_ent.entity_type
+                            && s_rels.len() >= 3
+                            && o_rels.len() >= 3
+                        {
+                            evidence_score += 0.05;
                         }
 
                         // Signal 4: Mutual neighbors (shared connections)
@@ -8001,7 +8001,7 @@ impl<'a> Prometheus<'a> {
         let mut promoted = 0usize;
         let mut rejected = 0usize;
 
-        for (_pair, group) in &pair_groups {
+        for group in pair_groups.values() {
             if group.len() < 2 {
                 continue;
             }
@@ -8951,18 +8951,16 @@ impl<'a> Prometheus<'a> {
             if group.len() > 3000 {
                 continue; // skip huge groups
             }
-            for i in 0..group.len() {
-                let short = group[i];
+            for (i, &short) in group.iter().enumerate() {
                 let short_lower = short.name.to_lowercase();
                 let short_words: Vec<&str> = short_lower.split_whitespace().collect();
                 if short_words.len() > 3 {
                     continue; // only look at short names as "abbreviations"
                 }
-                for j in 0..group.len() {
+                for (j, &full) in group.iter().enumerate() {
                     if i == j {
                         continue;
                     }
-                    let full = group[j];
                     let full_lower = full.name.to_lowercase();
                     let full_words: Vec<&str> = full_lower.split_whitespace().collect();
                     // Short name must be shorter
@@ -10105,8 +10103,9 @@ impl<'a> Prometheus<'a> {
     /// E.g., "Ada Lovelace Building" → relates to existing "Ada Lovelace" entity
     /// with predicate "named_after". Also handles patterns like:
     /// - "X Award" → X + Award concept
-    /// - "X Institute" → X + organization  
+    /// - "X Institute" → X + organization
     /// - "X Day" → X + event
+    ///
     /// Returns count of new relations created and entities cleaned up.
     pub fn decompose_compound_entities(&self) -> Result<(usize, usize)> {
         let entities = self.brain.all_entities()?;
@@ -10576,7 +10575,7 @@ impl<'a> Prometheus<'a> {
                 continue;
             }
             // Try stripping 1, 2, (up to half) trailing words
-            let max_strip = (words.len() / 2).max(1).min(3);
+            let max_strip = (words.len() / 2).clamp(1, 3);
             for strip in 1..=max_strip {
                 if words.len() <= strip {
                     break;
@@ -10653,7 +10652,7 @@ impl<'a> Prometheus<'a> {
             let my_deg = degree.get(&e.id).copied().unwrap_or(0);
 
             // Try stripping 1-2 leading words
-            let max_strip = (words.len() / 2).max(1).min(2);
+            let max_strip = (words.len() / 2).clamp(1, 2);
             let mut found = false;
             for strip in 1..=max_strip {
                 if words.len() <= strip + 1 {
@@ -10740,6 +10739,7 @@ impl<'a> Prometheus<'a> {
     /// - "Claude Shannon Time" → "Claude Shannon"
     /// - "Grace Hopper Admiral" → "Grace Hopper"
     /// - "Caliph Selim I" → "Selim I"
+    ///
     /// Always merges into the entity with higher degree (more connections).
     /// Returns count of merges performed.
     pub fn merge_name_variants(&self) -> Result<usize> {
@@ -11215,15 +11215,12 @@ impl<'a> Prometheus<'a> {
 
             let should_purge = {
                 let deg = connected_degree.get(&e.id).copied().unwrap_or(0);
-                // Single word "Examples" or similar
-                if words.len() == 1 && concat_noise_words.contains(words[0]) && deg <= 5 {
-                    true
-                }
-                // Multi-word entities containing noise words
-                // Higher degree threshold for very strong noise signals
-                else if words.len() >= 2
-                    && words.iter().any(|w| concat_noise_words.contains(w))
-                    && deg <= 20
+                // Single word "Examples" or similar; multi-word entities containing
+                // noise words get a higher degree threshold (stronger noise signal)
+                if (words.len() == 1 && concat_noise_words.contains(words[0]) && deg <= 5)
+                    || (words.len() >= 2
+                        && words.iter().any(|w| concat_noise_words.contains(w))
+                        && deg <= 20)
                 {
                     true
                 }
@@ -11784,17 +11781,15 @@ impl<'a> Prometheus<'a> {
                     let mut pred_votes: HashMap<String, usize> = HashMap::new();
                     for &nbr in &shared_nbrs {
                         for r in &relations {
-                            if (r.subject_id == a && r.object_id == nbr)
+                            if ((r.subject_id == a && r.object_id == nbr)
                                 || (r.subject_id == nbr && r.object_id == a)
                                 || (r.subject_id == b && r.object_id == nbr)
-                                || (r.subject_id == nbr && r.object_id == b)
+                                || (r.subject_id == nbr && r.object_id == b))
+                                && !GENERIC_PREDICATES.contains(&r.predicate.as_str())
+                                && r.predicate != "related_to"
+                                && r.predicate != "associated_with"
                             {
-                                if !GENERIC_PREDICATES.contains(&r.predicate.as_str())
-                                    && r.predicate != "related_to"
-                                    && r.predicate != "associated_with"
-                                {
-                                    *pred_votes.entry(r.predicate.clone()).or_insert(0) += 1;
-                                }
+                                *pred_votes.entry(r.predicate.clone()).or_insert(0) += 1;
                             }
                         }
                     }
@@ -13604,8 +13599,7 @@ impl<'a> Prometheus<'a> {
                     Some(p) => p,
                     None => continue,
                 };
-                for j in (i + 1)..group.len() {
-                    let b = group[j];
+                for &b in &group[(i + 1)..] {
                     let b_preds = match out_preds.get(&b) {
                         Some(p) => p,
                         None => continue,
@@ -14094,10 +14088,10 @@ impl<'a> Prometheus<'a> {
                         continue;
                     }
 
-                    let base_conf = if is_name_fragment {
+                    // Name fragments and very close edit distances (>85% similar)
+                    // are equally strong merge signals
+                    let base_conf = if is_name_fragment || norm_dist < 0.15 {
                         0.70
-                    } else if norm_dist < 0.15 {
-                        0.70 // very close edit distance (>85% similar)
                     } else {
                         0.60
                     };
@@ -14426,8 +14420,7 @@ impl<'a> Prometheus<'a> {
                 Some(v) => v,
                 None => continue,
             };
-            for j in (i + 1)..sample_ids.len() {
-                let b = sample_ids[j];
+            for &b in &sample_ids[(i + 1)..] {
                 if existing_edges.contains(&(a, b)) {
                     continue;
                 }
@@ -15852,7 +15845,7 @@ impl<'a> Prometheus<'a> {
             .map(|e| (e.name.to_lowercase(), e))
             .collect();
 
-        let mut score = 0.0;
+        let mut score = 0.0f64;
 
         let s_ent = name_to_ent.get(&h.subject.to_lowercase());
         let o_ent = name_to_ent.get(&h.object.to_lowercase());
@@ -15907,7 +15900,7 @@ impl<'a> Prometheus<'a> {
             }
         }
 
-        Ok((score as f64).min(1.0))
+        Ok(score.min(1.0))
     }
 
     /// Aggressively purge single-word island entities that are clearly generic English words,
@@ -16030,6 +16023,7 @@ impl<'a> Prometheus<'a> {
     /// - "Byzantine Empire Diocletian" (concept) → "Byzantine Empire" (concept)
     /// - "Emmy Noether APSNews" (person) → "Emmy Noether" (person)
     /// - "Ada Lovelace WIRED" (person) → "Ada Lovelace" (person)
+    ///
     /// Only merges when the target (shorter name) has strictly more connections.
     pub fn aggressive_prefix_dedup(&self) -> Result<usize> {
         let entities = self.brain.all_entities()?;
@@ -16393,7 +16387,7 @@ impl<'a> Prometheus<'a> {
 
             // Name quality: multi-word proper nouns are higher quality
             let word_count = name.split_whitespace().count();
-            if word_count >= 2 && word_count <= 4 {
+            if (2..=4).contains(&word_count) {
                 score += 0.3;
                 reasons.push("good-name-length".into());
             } else if word_count == 1 && name.len() >= 4 {
@@ -16749,10 +16743,9 @@ impl<'a> Prometheus<'a> {
         let mut entity_facts: HashMap<i64, Vec<(String, String)>> = HashMap::new();
         for r in &remaining3 {
             for eid in [r.subject_id, r.object_id] {
-                if !entity_facts.contains_key(&eid) {
+                if let std::collections::hash_map::Entry::Vacant(entry) = entity_facts.entry(eid) {
                     if let Ok(facts) = self.brain.get_facts_for(eid) {
-                        entity_facts.insert(
-                            eid,
+                        entry.insert(
                             facts
                                 .into_iter()
                                 .map(|f| (f.key, f.value.to_lowercase()))
@@ -18051,6 +18044,7 @@ impl<'a> Prometheus<'a> {
     /// - Structural importance (betweenness centrality proxy via degree * clustering)
     /// - Uniqueness (inverse of how many similar entities exist)
     /// - Connectivity quality (ratio of diverse predicates to total degree)
+    ///
     /// Returns (entity_name, entity_type, info_score) sorted descending.
     pub fn information_content_ranking(&self, limit: usize) -> Result<Vec<(String, String, f64)>> {
         let entities = self.brain.all_entities()?;
@@ -18632,7 +18626,7 @@ impl<'a> Prometheus<'a> {
                         } else {
                             island_toks.as_slice()
                         };
-                        let shares_surname = other_toks.iter().any(|t| *t == person_last);
+                        let shares_surname = other_toks.contains(&person_last);
                         if !shares_surname {
                             continue;
                         }
@@ -20546,10 +20540,8 @@ impl<'a> Prometheus<'a> {
                     }
                 }
                 let cosine = dot / (island_norm * ce_norm);
-                if cosine > 0.4 {
-                    if best.is_none() || cosine > best.unwrap().1 {
-                        best = Some((idx, cosine));
-                    }
+                if cosine > 0.4 && (best.is_none() || cosine > best.unwrap().1) {
+                    best = Some((idx, cosine));
                 }
             }
 
@@ -20659,7 +20651,7 @@ impl<'a> Prometheus<'a> {
         }
 
         let mut reconnected = 0usize;
-        for (_ts, cohort) in &time_cohorts {
+        for cohort in time_cohorts.values() {
             if cohort.len() < 2 || cohort.len() > 20 {
                 continue; // Skip singletons and overly large batches
             }
@@ -20728,7 +20720,7 @@ impl<'a> Prometheus<'a> {
                     ("place", "place") => "geographically_related_to",
                     _ => "related_to",
                 };
-                let ok = self.brain.with_conn(|conn| {
+                self.brain.with_conn(|conn| {
                     conn.execute(
                         "INSERT OR IGNORE INTO relations (subject_id, predicate, object_id, confidence, source_url, learned_at)
                          VALUES (?1, ?2, ?3, 0.4, 'temporal_cohort', ?4)",
@@ -20736,7 +20728,6 @@ impl<'a> Prometheus<'a> {
                     )?;
                     Ok(())
                 })?;
-                let _ = ok;
                 connected.insert(eid);
                 reconnected += 1;
                 if reconnected >= 500 {
@@ -20812,7 +20803,7 @@ impl<'a> Prometheus<'a> {
             };
 
             // Coherence = density * (1 + external connectivity ratio)
-            let _avg_degree = if members.len() > 0 {
+            let _avg_degree = if !members.is_empty() {
                 total_degree as f64 / members.len() as f64
             } else {
                 0.0
@@ -20899,11 +20890,6 @@ impl<'a> Prometheus<'a> {
         Ok(report)
     }
 
-    /// Demote or remove uniform-predicate hubs: entities with degree ≥ 5 where
-    /// >90% of relations use the same predicate. These are often NLP artifacts
-    /// (e.g., entity connected to many others only via "contemporary_of").
-    /// Removes relations from the dominant predicate if they're low confidence,
-    /// keeping the entity but reducing its artificial inflation.
     /// Detect discovery plateau: returns (is_plateau, recent_rate, trend).
     /// A plateau means the last 5 runs show declining or flat confirmation rate.
     pub fn detect_plateau(&self) -> Result<(bool, f64, f64)> {
@@ -21030,7 +21016,7 @@ impl<'a> Prometheus<'a> {
                         0.0
                     };
 
-                    let conf = ((0.6 - constraint * 0.5) + type_bonus).max(0.20).min(0.80);
+                    let conf = ((0.6 - constraint * 0.5) + type_bonus).clamp(0.20, 0.80);
                     hypotheses.push(Hypothesis {
                         id: 0,
                         subject: name_a.to_string(),
@@ -21062,6 +21048,12 @@ impl<'a> Prometheus<'a> {
         Ok(hypotheses)
     }
 
+    /// Demote or remove uniform-predicate hubs: entities with degree >= 5
+    /// where over 90% of relations use the same predicate. These are often NLP
+    /// artifacts (e.g., entity connected to many others only via "contemporary_of").
+    ///
+    /// Removes relations from the dominant predicate if they're low confidence,
+    /// keeping the entity but reducing its artificial inflation.
     pub fn demote_uniform_hubs(&self, min_degree: usize, max_dominant_frac: f64) -> Result<usize> {
         let entropy_data = crate::graph::per_entity_predicate_entropy(self.brain, min_degree)?;
         let entities = self.brain.all_entities()?;
@@ -22281,7 +22273,7 @@ impl<'a> Prometheus<'a> {
             let min_overlap = if tokens.len() <= 2 {
                 2
             } else {
-                (tokens.len() + 1) / 2
+                tokens.len().div_ceil(2)
             };
             let best = subject_scores
                 .iter()
@@ -22297,7 +22289,7 @@ impl<'a> Prometheus<'a> {
                 {
                     "pioneered".to_string()
                 } else {
-                    format!("related_to")
+                    "related_to".to_string()
                 };
                 let _ = self.brain.upsert_relation(
                     subject_id,
@@ -22730,7 +22722,7 @@ impl<'a> Prometheus<'a> {
                             .iter()
                             .filter(|r| r.subject_id == eid || r.object_id == eid)
                             .count();
-                        if best_hub.map_or(true, |(_, d)| deg > d) {
+                        if best_hub.is_none_or(|(_, d)| deg > d) {
                             best_hub = Some((eid, deg));
                         }
                     }
@@ -23109,7 +23101,7 @@ impl<'a> Prometheus<'a> {
         let mut merged = 0usize;
         let mut absorbed: HashSet<i64> = HashSet::new();
 
-        for (_last, group) in &by_last {
+        for group in by_last.values() {
             if group.len() < 2 || group.len() > 10 {
                 continue;
             }
@@ -23122,8 +23114,7 @@ impl<'a> Prometheus<'a> {
                     Some(e) => e,
                     None => continue,
                 };
-                for j in (i + 1)..group.len() {
-                    let (id_b, first_b, deg_b) = &group[j];
+                for (id_b, first_b, deg_b) in group.iter().skip(i + 1) {
                     if absorbed.contains(id_b) || id_a == id_b {
                         continue;
                     }
@@ -23196,8 +23187,7 @@ impl<'a> Prometheus<'a> {
                 if absorbed.contains(id_a) {
                     continue;
                 }
-                for j in (i + 1)..group.len() {
-                    let (id_b, prefix_b, deg_b) = &group[j];
+                for (id_b, prefix_b, deg_b) in group.iter().skip(i + 1) {
                     if absorbed.contains(id_b) || id_a == id_b {
                         continue;
                     }
@@ -23985,7 +23975,7 @@ impl<'a> Prometheus<'a> {
             // Split on dash and check both parts look like surnames
             let parts: Vec<&str> = e
                 .name
-                .split(|c| c == '–' || c == '—')
+                .split(['–', '—'])
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
                 .collect();
@@ -24052,7 +24042,7 @@ impl<'a> Prometheus<'a> {
         }
 
         let mut reconnected = 0usize;
-        for (_ts, cohort) in &minute_cohorts {
+        for cohort in minute_cohorts.values() {
             if cohort.len() < 3 || cohort.len() > 50 {
                 continue;
             }
@@ -24156,7 +24146,7 @@ impl<'a> Prometheus<'a> {
         }
 
         let mut reconnected = 0usize;
-        for (_ts, cohort) in &minute_cohorts {
+        for cohort in minute_cohorts.values() {
             // Only handle large cohorts (the ones minute-cohort skips)
             if cohort.len() <= 50 {
                 continue;
@@ -24172,7 +24162,7 @@ impl<'a> Prometheus<'a> {
                 }
             }
 
-            for (_etype, group) in &type_groups {
+            for group in type_groups.values() {
                 if group.len() < 2 {
                     continue;
                 }
@@ -27633,7 +27623,7 @@ fn parse_hypothesis_row(row: &rusqlite::Row) -> Hypothesis {
         evidence_for: serde_json::from_str(&ef).unwrap_or_default(),
         evidence_against: serde_json::from_str(&ea).unwrap_or_default(),
         reasoning_chain: serde_json::from_str(&rc).unwrap_or_default(),
-        status: HypothesisStatus::from_str(&row.get::<_, String>(8).unwrap_or_default()),
+        status: HypothesisStatus::parse(&row.get::<_, String>(8).unwrap_or_default()),
         discovered_at: row.get(9).unwrap_or_default(),
         pattern_source: row.get(10).unwrap_or_default(),
     }
@@ -27737,14 +27727,14 @@ fn is_type_incompatible(subject_type: &str, object_type: &str, predicate: &str) 
         }
     }
 
-    // located_near requires at least one place
-    if predicate == "located_near" {
-        if subject_type != "place" && object_type != "place" {
-            // concept-concept or person-person for located_near is fine if one is a place
-            if subject_type == "concept" || object_type == "concept" {
-                return true;
-            }
-        }
+    // located_near requires at least one place; concept-concept or
+    // concept-other is acceptable without a place
+    if predicate == "located_near"
+        && subject_type != "place"
+        && object_type != "place"
+        && (subject_type == "concept" || object_type == "concept")
+    {
+        return true;
     }
 
     // affiliated_with requires person→organization or person→concept
@@ -28045,7 +28035,7 @@ mod tests {
         let brain = test_brain();
         let a = brain.upsert_entity("X1", "widget").unwrap();
         let b = brain.upsert_entity("X2", "widget").unwrap();
-        let c = brain.upsert_entity("X3", "widget").unwrap();
+        brain.upsert_entity("X3", "widget").unwrap();
         let t = brain.upsert_entity("Target", "thing").unwrap();
         brain.upsert_relation(a, "has_feature", t, "test").unwrap();
         brain.upsert_relation(b, "has_feature", t, "test").unwrap();
@@ -28351,7 +28341,7 @@ mod tests {
         assert!(!report.summary.is_empty());
         // Should find at least the B-C structural hole hypothesis
         assert!(
-            report.hypotheses_generated.len() > 0 || report.patterns_found.len() > 0,
+            !report.hypotheses_generated.is_empty() || !report.patterns_found.is_empty(),
             "report: {:?}",
             report.summary
         );
@@ -28444,19 +28434,19 @@ mod tests {
     #[test]
     fn test_hypothesis_status_roundtrip() {
         assert_eq!(
-            HypothesisStatus::from_str(HypothesisStatus::Proposed.as_str()),
+            HypothesisStatus::parse(HypothesisStatus::Proposed.as_str()),
             HypothesisStatus::Proposed
         );
         assert_eq!(
-            HypothesisStatus::from_str(HypothesisStatus::Testing.as_str()),
+            HypothesisStatus::parse(HypothesisStatus::Testing.as_str()),
             HypothesisStatus::Testing
         );
         assert_eq!(
-            HypothesisStatus::from_str(HypothesisStatus::Confirmed.as_str()),
+            HypothesisStatus::parse(HypothesisStatus::Confirmed.as_str()),
             HypothesisStatus::Confirmed
         );
         assert_eq!(
-            HypothesisStatus::from_str(HypothesisStatus::Rejected.as_str()),
+            HypothesisStatus::parse(HypothesisStatus::Rejected.as_str()),
             HypothesisStatus::Rejected
         );
     }
@@ -28472,7 +28462,7 @@ mod tests {
             PatternType::FrequentSubgraph,
         ];
         for t in &types {
-            assert_eq!(PatternType::from_str(t.as_str()), *t);
+            assert_eq!(PatternType::parse(t.as_str()), *t);
         }
     }
 

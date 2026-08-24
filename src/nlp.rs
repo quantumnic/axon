@@ -5953,11 +5953,7 @@ fn classify_entity_type(name: &str) -> &'static str {
     // Patent numbers (e.g. "US11025421B2") → technology
     if name.len() > 8
         && (name.starts_with("US") || name.starts_with("EP") || name.starts_with("WO"))
-        && name
-            .chars()
-            .skip(2)
-            .next()
-            .is_some_and(|c| c.is_ascii_digit())
+        && name.chars().nth(2).is_some_and(|c| c.is_ascii_digit())
         && name.chars().filter(|c| c.is_ascii_digit()).count() >= 5
     {
         return "technology";
@@ -7001,40 +6997,41 @@ fn classify_entity_type(name: &str) -> &'static str {
         "friedhof",
         "horn",
     ];
-    if !lower.contains(' ') && lower.len() > 6 {
-        if GERMAN_PLACE_SUFFIXES.iter().any(|s| lower.ends_with(s)) {
-            // Exclude known person names ending in these (e.g. Ginzburg, Hausdorff)
-            const PERSON_EXCEPTIONS: &[&str] = &[
-                "ginzburg",
-                "hausdorff",
-                "hamburg",
-                "salzburg",
-                "heidelberg",
-                "nuremberg",
-                "gutenberg",
-                "goldberg",
-                "rosenberg",
-                "weinberg",
-                "spielberg",
-                "zuckerberg",
-                "bloomberg",
-                "sandberg",
-                "kirchhoff",
-                "kirchner",
-                "waghorn",
-                "blinkhorn",
-                "longhorn",
-                "elkhorn",
-                "buckhorn",
-                "leghorn",
-                "inkhorn",
-                "foghorn",
-                "alphorn",
-                "flügelhorn",
-            ];
-            if !PERSON_EXCEPTIONS.contains(&lower.as_str()) {
-                return "place";
-            }
+    if !lower.contains(' ')
+        && lower.len() > 6
+        && GERMAN_PLACE_SUFFIXES.iter().any(|s| lower.ends_with(s))
+    {
+        // Exclude known person names ending in these (e.g. Ginzburg, Hausdorff)
+        const PERSON_EXCEPTIONS: &[&str] = &[
+            "ginzburg",
+            "hausdorff",
+            "hamburg",
+            "salzburg",
+            "heidelberg",
+            "nuremberg",
+            "gutenberg",
+            "goldberg",
+            "rosenberg",
+            "weinberg",
+            "spielberg",
+            "zuckerberg",
+            "bloomberg",
+            "sandberg",
+            "kirchhoff",
+            "kirchner",
+            "waghorn",
+            "blinkhorn",
+            "longhorn",
+            "elkhorn",
+            "buckhorn",
+            "leghorn",
+            "inkhorn",
+            "foghorn",
+            "alphorn",
+            "flügelhorn",
+        ];
+        if !PERSON_EXCEPTIONS.contains(&lower.as_str()) {
+            return "place";
         }
     }
 

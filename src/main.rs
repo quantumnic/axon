@@ -590,7 +590,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Hypotheses { status } => {
             let p = prometheus::Prometheus::new(&brain)?;
-            let filter = status.map(|s| prometheus::HypothesisStatus::from_str(&s));
+            let filter = status.map(|s| prometheus::HypothesisStatus::parse(&s));
             let hyps = p.list_hypotheses(filter)?;
             if hyps.is_empty() {
                 println!("🤷 No hypotheses yet. Run `axon discover` first!");
@@ -746,7 +746,11 @@ async fn main() -> anyhow::Result<()> {
                 .map(|l| l.trim())
                 .filter(|l| !l.is_empty() && !l.starts_with('#'))
                 .collect();
-            println!("📚 Training from {} ({} URLs)...\n", sources_path.display(), urls.len());
+            println!(
+                "📚 Training from {} ({} URLs)...\n",
+                sources_path.display(),
+                urls.len()
+            );
             let mut total_entities = 0u64;
             let mut total_relations = 0u64;
             let mut total_facts = 0u64;
