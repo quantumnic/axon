@@ -1097,8 +1097,8 @@ pub fn harmonic_centrality(brain: &Brain) -> Result<HashMap<i64, f64>, rusqlite:
             let d = dist[&v];
             if let Some(neighbors) = adj.get(&v) {
                 for &w in neighbors {
-                    if !dist.contains_key(&w) {
-                        dist.insert(w, d + 1);
+                    if let std::collections::hash_map::Entry::Vacant(e) = dist.entry(w) {
+                        e.insert(d + 1);
                         queue.push_back(w);
                     }
                 }
@@ -1160,8 +1160,8 @@ pub fn harmonic_centrality_top_k(
             let d = dist[&v];
             if let Some(neighbors) = adj.get(&v) {
                 for &w in neighbors {
-                    if !dist.contains_key(&w) {
-                        dist.insert(w, d + 1);
+                    if let std::collections::hash_map::Entry::Vacant(e) = dist.entry(w) {
+                        e.insert(d + 1);
                         queue.push_back(w);
                     }
                 }
@@ -1418,10 +1418,8 @@ pub fn entity_similarity(
         .collect();
 
     let mut results = Vec::new();
-    for i in 0..candidates.len() {
-        for j in (i + 1)..candidates.len() {
-            let (id_a, preds_a) = candidates[i];
-            let (id_b, preds_b) = candidates[j];
+    for (i, &(id_a, preds_a)) in candidates.iter().enumerate() {
+        for &(id_b, preds_b) in &candidates[(i + 1)..] {
             let intersection = preds_a.intersection(preds_b).count();
             if intersection == 0 {
                 continue;
@@ -2290,271 +2288,6 @@ pub fn suggest_community_bridges(
         }
     }
     Ok(bridges)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::db::Brain;
-
-    fn setup() -> Brain {
-        let brain = Brain::open_in_memory().unwrap();
-        let a = brain.upsert_entity("Alice", "person").unwrap();
-        let b = brain.upsert_entity("Bob", "person").unwrap();
-        let c = brain.upsert_entity("Charlie", "person").unwrap();
-        let d = brain.upsert_entity("Diana", "person").unwrap();
-        brain.upsert_relation(a, "knows", b, "test").unwrap();
-        brain.upsert_relation(b, "knows", c, "test").unwrap();
-        brain.upsert_relation(c, "knows", d, "test").unwrap();
-        brain
-    }
-
-    #[test]
-    fn test_shortest_path_direct() {
-        let brain = setup();
-        let path = shortest_path(&brain, "Alice", "Bob").unwrap();
-        assert!(path.is_some());
-        assert_eq!(path.unwrap().len(), 2);
-    }
-
-    #[test]
-    fn test_shortest_path_multi_hop() {
-        let brain = setup();
-        let path = shortest_path(&brain, "Alice", "Diana").unwrap();
-        assert!(path.is_some());
-        assert_eq!(path.unwrap().len(), 4);
-    }
-
-    #[test]
-    fn test_shortest_path_not_found() {
-        let brain = setup();
-        brain.upsert_entity("Isolated", "person").unwrap();
-        let path = shortest_path(&brain, "Alice", "Isolated").unwrap();
-        assert!(path.is_none());
-    }
-
-    #[test]
-    fn test_shortest_path_unknown() {
-        let brain = setup();
-        let path = shortest_path(&brain, "Alice", "Nobody").unwrap();
-        assert!(path.is_none());
-    }
-
-    #[test]
-    fn test_all_paths() {
-        let brain = setup();
-        let a = brain.get_entity_by_name("Alice").unwrap().unwrap().id;
-        let c = brain.get_entity_by_name("Charlie").unwrap().unwrap().id;
-        brain.upsert_relation(a, "friend_of", c, "test").unwrap();
-        let paths = all_paths(&brain, "Alice", "Charlie", 5).unwrap();
-        assert!(paths.len() >= 2);
-    }
-
-    #[test]
-    fn test_all_paths_depth_limit() {
-        let brain = setup();
-        let paths = all_paths(&brain, "Alice", "Diana", 2).unwrap();
-        assert!(paths.is_empty());
-    }
-
-    #[test]
-    fn test_communities() {
-        let brain = Brain::open_in_memory().unwrap();
-        let a = brain.upsert_entity("A1", "node").unwrap();
-        let b = brain.upsert_entity("A2", "node").unwrap();
-        let c = brain.upsert_entity("B1", "node").unwrap();
-        let d = brain.upsert_entity("B2", "node").unwrap();
-        brain.upsert_relation(a, "link", b, "test").unwrap();
-        brain.upsert_relation(c, "link", d, "test").unwrap();
-        let communities = detect_communities(&brain).unwrap();
-        assert!(communities.len() >= 2);
-    }
-
-    #[test]
-    fn test_pagerank() {
-        let brain = setup();
-        let scores = pagerank(&brain, 0.85, 20).unwrap();
-        assert_eq!(scores.len(), 4);
-        let total: f64 = scores.values().sum();
-        assert!((total - 1.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_pagerank_empty() {
-        let brain = Brain::open_in_memory().unwrap();
-        let scores = pagerank(&brain, 0.85, 20).unwrap();
-        assert!(scores.is_empty());
-    }
-
-    #[test]
-    fn test_infer_transitive() {
-        let brain = Brain::open_in_memory().unwrap();
-        let a = brain.upsert_entity("Paris", "city").unwrap();
-        let b = brain.upsert_entity("France", "country").unwrap();
-        let c = brain.upsert_entity("Europe", "continent").unwrap();
-        brain.upsert_relation(a, "located_in", b, "test").unwrap();
-        brain.upsert_relation(b, "located_in", c, "test").unwrap();
-        let inferred = infer_transitive(&brain).unwrap();
-        assert!(!inferred.is_empty());
-        assert!(inferred
-            .iter()
-            .any(|(s, _, o)| s == "Paris" && o == "Europe"));
-    }
-
-    #[test]
-    fn test_detect_contradictions() {
-        let brain = Brain::open_in_memory().unwrap();
-        let e = brain.upsert_entity("France", "country").unwrap();
-        brain.upsert_fact(e, "capital", "Paris", "src1").unwrap();
-        brain.upsert_fact(e, "capital", "Lyon", "src2").unwrap();
-        let contradictions = detect_contradictions(&brain).unwrap();
-        assert_eq!(contradictions.len(), 1);
-        assert_eq!(contradictions[0].2.len(), 2);
-    }
-
-    #[test]
-    fn test_no_contradictions() {
-        let brain = Brain::open_in_memory().unwrap();
-        let e = brain.upsert_entity("France", "country").unwrap();
-        brain.upsert_fact(e, "capital", "Paris", "src1").unwrap();
-        assert!(detect_contradictions(&brain).unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_merge_near_duplicates() {
-        let brain = Brain::open_in_memory().unwrap();
-        brain.upsert_entity("Google", "company").unwrap();
-        brain.upsert_entity("Gogle", "company").unwrap();
-        brain.upsert_entity("Microsoft", "company").unwrap();
-        let merged = merge_near_duplicates(&brain).unwrap();
-        assert_eq!(merged.len(), 1);
-        let entities = brain.all_entities().unwrap();
-        assert_eq!(
-            entities
-                .iter()
-                .filter(|e| e.entity_type == "company")
-                .count(),
-            2
-        );
-    }
-
-    #[test]
-    fn test_format_path() {
-        let brain = setup();
-        let path = shortest_path(&brain, "Alice", "Charlie").unwrap().unwrap();
-        let formatted = format_path(&brain, &path).unwrap();
-        assert!(formatted.contains("Alice"));
-        assert!(formatted.contains("Charlie"));
-    }
-
-    #[test]
-    fn test_k_core_decomposition() {
-        let brain = Brain::open_in_memory().unwrap();
-        // Create a triangle (3-clique) + one pendant node
-        let a = brain.upsert_entity("A", "node").unwrap();
-        let b = brain.upsert_entity("B", "node").unwrap();
-        let c = brain.upsert_entity("C", "node").unwrap();
-        let d = brain.upsert_entity("D", "node").unwrap();
-        brain.upsert_relation(a, "link", b, "test").unwrap();
-        brain.upsert_relation(b, "link", c, "test").unwrap();
-        brain.upsert_relation(a, "link", c, "test").unwrap();
-        brain.upsert_relation(a, "link", d, "test").unwrap(); // D is pendant (degree 1)
-        let cores = k_core_decomposition(&brain).unwrap();
-        // A, B, C form a 2-core (triangle), D is in 1-core only
-        assert_eq!(*cores.get(&d).unwrap(), 1);
-        assert!(*cores.get(&a).unwrap() >= 2);
-        assert!(*cores.get(&b).unwrap() >= 2);
-        assert!(*cores.get(&c).unwrap() >= 2);
-    }
-
-    #[test]
-    fn test_densest_core() {
-        let brain = Brain::open_in_memory().unwrap();
-        let a = brain.upsert_entity("A", "node").unwrap();
-        let b = brain.upsert_entity("B", "node").unwrap();
-        let c = brain.upsert_entity("C", "node").unwrap();
-        brain.upsert_relation(a, "link", b, "test").unwrap();
-        brain.upsert_relation(b, "link", c, "test").unwrap();
-        brain.upsert_relation(a, "link", c, "test").unwrap();
-        let (k, members) = densest_core(&brain, 3).unwrap();
-        assert_eq!(k, 2);
-        assert_eq!(members.len(), 3);
-    }
-
-    #[test]
-    fn test_estimated_diameter() {
-        let brain = setup();
-        let (diam, avg, samples) = estimated_diameter(&brain, 10).unwrap();
-        assert!(diam >= 3, "diameter should be at least 3 for A-B-C-D chain");
-        assert!(avg > 0.0);
-        assert!(samples > 0);
-    }
-
-    #[test]
-    fn test_small_world() {
-        let brain = setup();
-        let (sigma, c, l) = small_world_coefficient(&brain).unwrap();
-        // Small graph, just check it doesn't panic and returns valid values
-        assert!(sigma >= 0.0);
-        assert!(c >= 0.0);
-        assert!(l >= 0.0);
-    }
-
-    #[test]
-    fn test_resource_allocation_predict() {
-        let brain = Brain::open_in_memory().unwrap();
-        let a = brain.upsert_entity("A", "person").unwrap();
-        let b = brain.upsert_entity("B", "person").unwrap();
-        let c = brain.upsert_entity("C", "person").unwrap();
-        let d = brain.upsert_entity("D", "person").unwrap();
-        brain.upsert_relation(a, "knows", c, "test").unwrap();
-        brain.upsert_relation(b, "knows", c, "test").unwrap();
-        brain.upsert_relation(a, "knows", d, "test").unwrap();
-        brain.upsert_relation(b, "knows", d, "test").unwrap();
-        let preds = resource_allocation_predict(&brain, 10).unwrap();
-        // A and B share neighbors C and D but aren't directly connected
-        assert!(!preds.is_empty());
-        // The unconnected pair (A,B) should appear somewhere in predictions with score > 0
-        let ab_pred = preds
-            .iter()
-            .find(|(x, y, _)| (*x == a && *y == b) || (*x == b && *y == a));
-        assert!(ab_pred.is_some(), "A-B pair should be predicted");
-        assert!(ab_pred.unwrap().2 > 0.0);
-    }
-
-    #[test]
-    fn test_type_aware_link_predict() {
-        let brain = Brain::open_in_memory().unwrap();
-        let a = brain.upsert_entity("Alice", "person").unwrap();
-        let b = brain.upsert_entity("Bob", "person").unwrap();
-        let c = brain.upsert_entity("Org1", "organization").unwrap();
-        let d = brain.upsert_entity("Org2", "organization").unwrap();
-        brain.upsert_relation(a, "works_at", c, "test").unwrap();
-        brain.upsert_relation(b, "works_at", c, "test").unwrap();
-        brain.upsert_relation(a, "member_of", d, "test").unwrap();
-        brain.upsert_relation(b, "member_of", d, "test").unwrap();
-        let preds = type_aware_link_predict(&brain, 10).unwrap();
-        assert!(!preds.is_empty());
-        // Should predict a link (score > 0)
-        assert!(preds[0].2 > 0.0);
-    }
-
-    #[test]
-    fn test_bfs_self_path() {
-        let brain = setup();
-        let path = shortest_path(&brain, "Alice", "Alice").unwrap();
-        assert!(path.is_some());
-        assert_eq!(path.unwrap().len(), 1);
-    }
-
-    #[test]
-    fn test_neighborhood_overlap() {
-        let brain = setup();
-        // The test graph may be too sparse for overlaps; just ensure no crash
-        let overlaps = neighborhood_overlap(&brain, 0.1, 20).unwrap();
-        // Result may be empty for sparse test data — that's OK
-        assert!(overlaps.len() <= 20);
-    }
 }
 
 /// Neighborhood overlap coefficient for link prediction.
@@ -4286,10 +4019,10 @@ pub fn ego_network_density(
     }
     let mut edges = 0usize;
     let neighbor_vec: Vec<i64> = neighbors.iter().copied().collect();
-    for i in 0..neighbor_vec.len() {
-        if let Some(adj_i) = adj.get(&neighbor_vec[i]) {
-            for j in (i + 1)..neighbor_vec.len() {
-                if adj_i.contains(&neighbor_vec[j]) {
+    for (i, &ni) in neighbor_vec.iter().enumerate() {
+        if let Some(adj_i) = adj.get(&ni) {
+            for &nj in &neighbor_vec[(i + 1)..] {
+                if adj_i.contains(&nj) {
                     edges += 1;
                 }
             }
@@ -4325,10 +4058,10 @@ pub fn batch_ego_density(
             continue;
         }
         let mut edges = 0usize;
-        for i in 0..neighbors.len() {
-            if let Some(adj_i) = adj.get(&neighbors[i]) {
-                for j in (i + 1)..neighbors.len() {
-                    if adj_i.contains(&neighbors[j]) {
+        for (i, &nb_i) in neighbors.iter().enumerate() {
+            if let Some(adj_i) = adj.get(&nb_i) {
+                for &nb_j in &neighbors[i + 1..] {
+                    if adj_i.contains(&nb_j) {
                         edges += 1;
                     }
                 }
@@ -4475,8 +4208,8 @@ pub fn approx_betweenness(
             if let Some(neighbors) = adj.get(&v) {
                 for &w in neighbors {
                     // First visit?
-                    if !dist.contains_key(&w) {
-                        dist.insert(w, dv + 1);
+                    if let std::collections::hash_map::Entry::Vacant(e) = dist.entry(w) {
+                        e.insert(dv + 1);
                         queue.push_back(w);
                     }
                     if dist[&w] == dv + 1 {
@@ -4702,7 +4435,7 @@ pub fn graph_quality_score(brain: &Brain) -> Result<(f64, HashMap<String, f64>),
     // 8. Degree assortativity: knowledge graphs are typically slightly disassortative.
     //    Score: map [-1,1] → [0,1] with slight preference for mild disassortativity.
     let assortativity = degree_assortativity(brain).unwrap_or(0.0);
-    let assort_score = if assortativity >= -0.3 && assortativity <= 0.1 {
+    let assort_score = if (-0.3..=0.1).contains(&assortativity) {
         1.0 // mild disassortativity is healthy for knowledge graphs
     } else {
         (1.0 - (assortativity - (-0.1)).abs()).max(0.0)
@@ -4897,10 +4630,13 @@ pub fn structural_hole_scores(
 /// Clustering anomaly detection: find entities whose local clustering coefficient
 /// deviates significantly from the expected clustering for their degree.
 /// Returns entities with z-score > threshold (surprisingly low or high clustering).
+/// One row of `clustering_anomalies` output.
+type ClusteringAnomaly = (i64, String, f64, f64, f64);
+
 pub fn clustering_anomalies(
     brain: &Brain,
     z_threshold: f64,
-) -> Result<Vec<(i64, String, f64, f64, f64)>, rusqlite::Error> {
+) -> Result<Vec<ClusteringAnomaly>, rusqlite::Error> {
     // (entity_id, name, actual_cc, expected_cc, z_score)
     let cc = clustering_coefficients(brain)?;
     let relations = brain.all_relations()?;
@@ -4999,8 +4735,7 @@ pub fn overlap_coefficient_predict(
     let mut predictions: Vec<(i64, i64, f64)> = Vec::new();
     let ids: Vec<i64> = meaningful.iter().copied().collect();
 
-    for i in 0..ids.len().min(500) {
-        let a = ids[i];
+    for &a in ids.iter().take(500) {
         let na = &neighbor_sets[&a];
         if na.is_empty() {
             continue;
@@ -5166,8 +4901,8 @@ pub fn closeness_centrality_top_k(
             let d = visited[&cur];
             if let Some(neighbors) = adj.get(&cur) {
                 for &nbr in neighbors {
-                    if !visited.contains_key(&nbr) {
-                        visited.insert(nbr, d + 1);
+                    if let std::collections::hash_map::Entry::Vacant(e) = visited.entry(nbr) {
+                        e.insert(d + 1);
                         queue.push_back(nbr);
                     }
                 }
@@ -5213,11 +4948,14 @@ pub fn closeness_centrality_top_k(
 /// Identify entities whose predicate sets violate expected predicate
 /// covariance patterns (entities with predicate A but missing correlated B).
 /// Returns (entity_id, entity_name, missing_predicate, correlated_with, jaccard).
+/// One row of `predicate_gap_entities` output.
+type PredicateGapRow = (i64, String, String, String, f64);
+
 pub fn predicate_gap_entities(
     brain: &Brain,
     min_jaccard: f64,
     max_results: usize,
-) -> Result<Vec<(i64, String, String, String, f64)>, rusqlite::Error> {
+) -> Result<Vec<PredicateGapRow>, rusqlite::Error> {
     let covariances = predicate_covariance(brain, min_jaccard)?;
     let relations = brain.all_relations()?;
 
@@ -5259,11 +4997,14 @@ pub fn predicate_gap_entities(
 /// Local degree anomalies: entities whose degree differs significantly from the
 /// average degree of their neighbors. High anomaly = structural outlier.
 /// Returns (entity_id, name, degree, avg_neighbor_degree, anomaly_score).
+/// One row of `degree_anomalies` output.
+type DegreeAnomaly = (i64, String, usize, f64, f64);
+
 pub fn degree_anomalies(
     brain: &Brain,
     min_degree: usize,
     limit: usize,
-) -> Result<Vec<(i64, String, usize, f64, f64)>, rusqlite::Error> {
+) -> Result<Vec<DegreeAnomaly>, rusqlite::Error> {
     let relations = brain.all_relations()?;
 
     let mut adj: HashMap<i64, HashSet<i64>> = HashMap::new();
@@ -5301,12 +5042,15 @@ pub fn degree_anomalies(
 /// that are NOT directly connected. These are strong link-prediction candidates.
 /// Uses cosine similarity on predicate-typed neighbor vectors.
 /// Returns: Vec<(id_a, name_a, id_b, name_b, similarity)> sorted by similarity desc.
+/// One row of `structural_similarity_pairs` output.
+type StructuralPair = (i64, String, i64, String, f64);
+
 pub fn structural_similarity_pairs(
     brain: &Brain,
     min_degree: usize,
     min_sim: f64,
     limit: usize,
-) -> Result<Vec<(i64, String, i64, String, f64)>, rusqlite::Error> {
+) -> Result<Vec<StructuralPair>, rusqlite::Error> {
     let relations = brain.all_relations()?;
     let entities = brain.all_entities()?;
     let id_to_name: HashMap<i64, String> =
@@ -5342,8 +5086,7 @@ pub fn structural_similarity_pairs(
     let mut results = Vec::new();
 
     // Compare all candidate pairs (O(n²) but filtered by min_degree)
-    for i in 0..candidates.len() {
-        let a = candidates[i];
+    for (i, &a) in candidates.iter().enumerate() {
         let a_neighbors = match adj.get(&a) {
             Some(n) => n,
             None => continue,
@@ -5353,8 +5096,7 @@ pub fn structural_similarity_pairs(
             None => continue,
         };
 
-        for j in (i + 1)..candidates.len() {
-            let b = candidates[j];
+        for &b in &candidates[(i + 1)..] {
             // Skip if already directly connected
             if a_neighbors.contains(&b) {
                 continue;
@@ -5488,11 +5230,14 @@ pub fn graph_evolution_rate(brain: &Brain) -> Result<(f64, f64, f64), rusqlite::
 /// a single predicate dominates their relations (Herfindahl index).
 /// Returns entities with HHI > threshold, sorted by concentration descending.
 /// Useful for finding entities that need predicate diversification.
+/// One row of `predicate_concentration` output.
+type ConcentrationRow = (i64, String, usize, f64, String);
+
 pub fn predicate_concentration(
     brain: &Brain,
     min_degree: usize,
     hhi_threshold: f64,
-) -> Result<Vec<(i64, String, usize, f64, String)>, rusqlite::Error> {
+) -> Result<Vec<ConcentrationRow>, rusqlite::Error> {
     let relations = brain.all_relations()?;
     let entities = brain.all_entities()?;
     let id_to_name: std::collections::HashMap<i64, &str> =
@@ -5684,9 +5429,10 @@ pub fn component_size_distribution(brain: &Brain) -> Result<Vec<(usize, usize)>,
     Ok(sorted)
 }
 
-pub fn k_shell_summary(
-    brain: &Brain,
-) -> Result<(usize, usize, Vec<(usize, usize)>), rusqlite::Error> {
+/// Summary of k-shell structure: (min_k, max_k, distribution).
+pub type KShellSummary = (usize, usize, Vec<(usize, usize)>);
+
+pub fn k_shell_summary(brain: &Brain) -> Result<KShellSummary, rusqlite::Error> {
     let shells = k_shell_decomposition(brain)?;
     let mut dist: HashMap<usize, usize> = HashMap::new();
     for &k in shells.values() {
@@ -5807,7 +5553,7 @@ pub fn community_predicate_entropy(brain: &Brain) -> Result<(f64, f64, f64), rus
     }
 
     let mut entropies = Vec::new();
-    for (_comm_id, pred_counts) in &community_predicates {
+    for pred_counts in community_predicates.values() {
         let total: usize = pred_counts.values().sum();
         if total < 2 {
             continue;
@@ -6268,10 +6014,13 @@ pub fn entity_importance_scores(
 
 /// Identify "knowledge gaps": well-connected entities with significantly fewer
 /// facts than peers of the same type — high-value enrichment targets.
+/// One row of `knowledge_gap_entities` output.
+type KnowledgeGapRow = (i64, String, String, i64, f64);
+
 pub fn knowledge_gap_entities(
     brain: &Brain,
     top_k: usize,
-) -> Result<Vec<(i64, String, String, i64, f64)>, rusqlite::Error> {
+) -> Result<Vec<KnowledgeGapRow>, rusqlite::Error> {
     brain.with_conn(|conn| {
         let mut type_avg: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
         let mut stmt = conn.prepare(
@@ -6332,4 +6081,269 @@ pub fn knowledge_gap_entities(
         gaps.truncate(top_k);
         Ok(gaps)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Brain;
+
+    fn setup() -> Brain {
+        let brain = Brain::open_in_memory().unwrap();
+        let a = brain.upsert_entity("Alice", "person").unwrap();
+        let b = brain.upsert_entity("Bob", "person").unwrap();
+        let c = brain.upsert_entity("Charlie", "person").unwrap();
+        let d = brain.upsert_entity("Diana", "person").unwrap();
+        brain.upsert_relation(a, "knows", b, "test").unwrap();
+        brain.upsert_relation(b, "knows", c, "test").unwrap();
+        brain.upsert_relation(c, "knows", d, "test").unwrap();
+        brain
+    }
+
+    #[test]
+    fn test_shortest_path_direct() {
+        let brain = setup();
+        let path = shortest_path(&brain, "Alice", "Bob").unwrap();
+        assert!(path.is_some());
+        assert_eq!(path.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_shortest_path_multi_hop() {
+        let brain = setup();
+        let path = shortest_path(&brain, "Alice", "Diana").unwrap();
+        assert!(path.is_some());
+        assert_eq!(path.unwrap().len(), 4);
+    }
+
+    #[test]
+    fn test_shortest_path_not_found() {
+        let brain = setup();
+        brain.upsert_entity("Isolated", "person").unwrap();
+        let path = shortest_path(&brain, "Alice", "Isolated").unwrap();
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn test_shortest_path_unknown() {
+        let brain = setup();
+        let path = shortest_path(&brain, "Alice", "Nobody").unwrap();
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn test_all_paths() {
+        let brain = setup();
+        let a = brain.get_entity_by_name("Alice").unwrap().unwrap().id;
+        let c = brain.get_entity_by_name("Charlie").unwrap().unwrap().id;
+        brain.upsert_relation(a, "friend_of", c, "test").unwrap();
+        let paths = all_paths(&brain, "Alice", "Charlie", 5).unwrap();
+        assert!(paths.len() >= 2);
+    }
+
+    #[test]
+    fn test_all_paths_depth_limit() {
+        let brain = setup();
+        let paths = all_paths(&brain, "Alice", "Diana", 2).unwrap();
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn test_communities() {
+        let brain = Brain::open_in_memory().unwrap();
+        let a = brain.upsert_entity("A1", "node").unwrap();
+        let b = brain.upsert_entity("A2", "node").unwrap();
+        let c = brain.upsert_entity("B1", "node").unwrap();
+        let d = brain.upsert_entity("B2", "node").unwrap();
+        brain.upsert_relation(a, "link", b, "test").unwrap();
+        brain.upsert_relation(c, "link", d, "test").unwrap();
+        let communities = detect_communities(&brain).unwrap();
+        assert!(communities.len() >= 2);
+    }
+
+    #[test]
+    fn test_pagerank() {
+        let brain = setup();
+        let scores = pagerank(&brain, 0.85, 20).unwrap();
+        assert_eq!(scores.len(), 4);
+        let total: f64 = scores.values().sum();
+        assert!((total - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_pagerank_empty() {
+        let brain = Brain::open_in_memory().unwrap();
+        let scores = pagerank(&brain, 0.85, 20).unwrap();
+        assert!(scores.is_empty());
+    }
+
+    #[test]
+    fn test_infer_transitive() {
+        let brain = Brain::open_in_memory().unwrap();
+        let a = brain.upsert_entity("Paris", "city").unwrap();
+        let b = brain.upsert_entity("France", "country").unwrap();
+        let c = brain.upsert_entity("Europe", "continent").unwrap();
+        brain.upsert_relation(a, "located_in", b, "test").unwrap();
+        brain.upsert_relation(b, "located_in", c, "test").unwrap();
+        let inferred = infer_transitive(&brain).unwrap();
+        assert!(!inferred.is_empty());
+        assert!(inferred
+            .iter()
+            .any(|(s, _, o)| s == "Paris" && o == "Europe"));
+    }
+
+    #[test]
+    fn test_detect_contradictions() {
+        let brain = Brain::open_in_memory().unwrap();
+        let e = brain.upsert_entity("France", "country").unwrap();
+        brain.upsert_fact(e, "capital", "Paris", "src1").unwrap();
+        brain.upsert_fact(e, "capital", "Lyon", "src2").unwrap();
+        let contradictions = detect_contradictions(&brain).unwrap();
+        assert_eq!(contradictions.len(), 1);
+        assert_eq!(contradictions[0].2.len(), 2);
+    }
+
+    #[test]
+    fn test_no_contradictions() {
+        let brain = Brain::open_in_memory().unwrap();
+        let e = brain.upsert_entity("France", "country").unwrap();
+        brain.upsert_fact(e, "capital", "Paris", "src1").unwrap();
+        assert!(detect_contradictions(&brain).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_merge_near_duplicates() {
+        let brain = Brain::open_in_memory().unwrap();
+        brain.upsert_entity("Google", "company").unwrap();
+        brain.upsert_entity("Gogle", "company").unwrap();
+        brain.upsert_entity("Microsoft", "company").unwrap();
+        let merged = merge_near_duplicates(&brain).unwrap();
+        assert_eq!(merged.len(), 1);
+        let entities = brain.all_entities().unwrap();
+        assert_eq!(
+            entities
+                .iter()
+                .filter(|e| e.entity_type == "company")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn test_format_path() {
+        let brain = setup();
+        let path = shortest_path(&brain, "Alice", "Charlie").unwrap().unwrap();
+        let formatted = format_path(&brain, &path).unwrap();
+        assert!(formatted.contains("Alice"));
+        assert!(formatted.contains("Charlie"));
+    }
+
+    #[test]
+    fn test_k_core_decomposition() {
+        let brain = Brain::open_in_memory().unwrap();
+        // Create a triangle (3-clique) + one pendant node
+        let a = brain.upsert_entity("A", "node").unwrap();
+        let b = brain.upsert_entity("B", "node").unwrap();
+        let c = brain.upsert_entity("C", "node").unwrap();
+        let d = brain.upsert_entity("D", "node").unwrap();
+        brain.upsert_relation(a, "link", b, "test").unwrap();
+        brain.upsert_relation(b, "link", c, "test").unwrap();
+        brain.upsert_relation(a, "link", c, "test").unwrap();
+        brain.upsert_relation(a, "link", d, "test").unwrap(); // D is pendant (degree 1)
+        let cores = k_core_decomposition(&brain).unwrap();
+        // A, B, C form a 2-core (triangle), D is in 1-core only
+        assert_eq!(*cores.get(&d).unwrap(), 1);
+        assert!(*cores.get(&a).unwrap() >= 2);
+        assert!(*cores.get(&b).unwrap() >= 2);
+        assert!(*cores.get(&c).unwrap() >= 2);
+    }
+
+    #[test]
+    fn test_densest_core() {
+        let brain = Brain::open_in_memory().unwrap();
+        let a = brain.upsert_entity("A", "node").unwrap();
+        let b = brain.upsert_entity("B", "node").unwrap();
+        let c = brain.upsert_entity("C", "node").unwrap();
+        brain.upsert_relation(a, "link", b, "test").unwrap();
+        brain.upsert_relation(b, "link", c, "test").unwrap();
+        brain.upsert_relation(a, "link", c, "test").unwrap();
+        let (k, members) = densest_core(&brain, 3).unwrap();
+        assert_eq!(k, 2);
+        assert_eq!(members.len(), 3);
+    }
+
+    #[test]
+    fn test_estimated_diameter() {
+        let brain = setup();
+        let (diam, avg, samples) = estimated_diameter(&brain, 10).unwrap();
+        assert!(diam >= 3, "diameter should be at least 3 for A-B-C-D chain");
+        assert!(avg > 0.0);
+        assert!(samples > 0);
+    }
+
+    #[test]
+    fn test_small_world() {
+        let brain = setup();
+        let (sigma, c, l) = small_world_coefficient(&brain).unwrap();
+        // Small graph, just check it doesn't panic and returns valid values
+        assert!(sigma >= 0.0);
+        assert!(c >= 0.0);
+        assert!(l >= 0.0);
+    }
+
+    #[test]
+    fn test_resource_allocation_predict() {
+        let brain = Brain::open_in_memory().unwrap();
+        let a = brain.upsert_entity("A", "person").unwrap();
+        let b = brain.upsert_entity("B", "person").unwrap();
+        let c = brain.upsert_entity("C", "person").unwrap();
+        let d = brain.upsert_entity("D", "person").unwrap();
+        brain.upsert_relation(a, "knows", c, "test").unwrap();
+        brain.upsert_relation(b, "knows", c, "test").unwrap();
+        brain.upsert_relation(a, "knows", d, "test").unwrap();
+        brain.upsert_relation(b, "knows", d, "test").unwrap();
+        let preds = resource_allocation_predict(&brain, 10).unwrap();
+        // A and B share neighbors C and D but aren't directly connected
+        assert!(!preds.is_empty());
+        // The unconnected pair (A,B) should appear somewhere in predictions with score > 0
+        let ab_pred = preds
+            .iter()
+            .find(|(x, y, _)| (*x == a && *y == b) || (*x == b && *y == a));
+        assert!(ab_pred.is_some(), "A-B pair should be predicted");
+        assert!(ab_pred.unwrap().2 > 0.0);
+    }
+
+    #[test]
+    fn test_type_aware_link_predict() {
+        let brain = Brain::open_in_memory().unwrap();
+        let a = brain.upsert_entity("Alice", "person").unwrap();
+        let b = brain.upsert_entity("Bob", "person").unwrap();
+        let c = brain.upsert_entity("Org1", "organization").unwrap();
+        let d = brain.upsert_entity("Org2", "organization").unwrap();
+        brain.upsert_relation(a, "works_at", c, "test").unwrap();
+        brain.upsert_relation(b, "works_at", c, "test").unwrap();
+        brain.upsert_relation(a, "member_of", d, "test").unwrap();
+        brain.upsert_relation(b, "member_of", d, "test").unwrap();
+        let preds = type_aware_link_predict(&brain, 10).unwrap();
+        assert!(!preds.is_empty());
+        // Should predict a link (score > 0)
+        assert!(preds[0].2 > 0.0);
+    }
+
+    #[test]
+    fn test_bfs_self_path() {
+        let brain = setup();
+        let path = shortest_path(&brain, "Alice", "Alice").unwrap();
+        assert!(path.is_some());
+        assert_eq!(path.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_neighborhood_overlap() {
+        let brain = setup();
+        // The test graph may be too sparse for overlaps; just ensure no crash
+        let overlaps = neighborhood_overlap(&brain, 0.1, 20).unwrap();
+        // Result may be empty for sparse test data — that's OK
+        assert!(overlaps.len() <= 20);
+    }
 }

@@ -1983,8 +1983,7 @@ mod tests {
 
     /// Create a test brain with a small but realistic knowledge graph.
     fn test_brain() -> Brain {
-        let brain = Brain::open_in_memory().unwrap();
-        brain
+        Brain::open_in_memory().unwrap()
     }
 
     /// Populate a brain with a rich test graph for reasoning tests.
@@ -2441,10 +2440,16 @@ mod tests {
         let brain = populated_brain();
         let analogies = discover_analogies(&brain).unwrap();
 
-        // Newton and Darwin should be analogous (both pioneered, contributed_to, member_of Royal Society)
-        let has_scientist_analogy = analogies.iter().any(|a| a.structural_similarity > 0.2);
-        // We should find at least some analogies in this graph
-        assert!(analogies.len() >= 0); // non-panic baseline; populated graph should yield some
+        // Analogies are only compared across different type domains, so
+        // same-type pairs (Newton/Darwin) are excluded by design. Whatever is
+        // returned must satisfy the discovery invariants.
+        for a in &analogies {
+            assert!(a.structural_similarity >= 0.3);
+            assert!(a.structural_similarity <= 1.0);
+            assert_ne!(a.domain_a, a.domain_b);
+            assert!(!a.mapping.is_empty());
+            assert!(a.entity_a != a.entity_b);
+        }
     }
 
     #[test]
@@ -2514,8 +2519,10 @@ mod tests {
         let brain = populated_brain();
         let concepts = discover_emergent_concepts(&brain).unwrap();
         // Multiple scientists share "pioneered" + "contributed_to" → should form concept
-        // (depends on IDF threshold, but at minimum it should not crash)
-        assert!(concepts.len() >= 0);
+        assert!(
+            !concepts.is_empty(),
+            "populated graph with shared predicate profiles should yield emergent concepts"
+        );
     }
 
     #[test]
@@ -2708,8 +2715,17 @@ mod tests {
     fn test_restructure_ontology_populated() {
         let brain = populated_brain();
         let report = restructure_ontology(&brain).unwrap();
-        // Should produce a valid report (may or may not have changes depending on data)
-        assert!(report.proposed_changes.len() >= 0);
+        // Report contents must be internally consistent whatever the data
+        for (_, _, jaccard) in &report.synonym_pairs {
+            assert!((0.0..=1.0).contains(jaccard));
+        }
+        for (_, count) in report
+            .overloaded_predicates
+            .iter()
+            .chain(&report.underused_predicates)
+        {
+            assert!(*count > 0);
+        }
     }
 
     #[test]
@@ -2805,17 +2821,27 @@ mod tests {
     fn test_reasoning_cycle_populated() {
         let brain = populated_brain();
         let report = reasoning_cycle(&brain).unwrap();
-        // Should complete without errors
         // The populated graph has a birth_year contradiction
-        assert!(report.contradictions_detected > 0 || report.contradictions_resolved >= 0);
+        assert!(
+            report.contradictions_detected > 0,
+            "populated graph contains a known contradiction that must be detected"
+        );
     }
 
     #[test]
     fn test_reasoning_cycle_with_causal_graph() {
         let brain = causal_brain();
+        // Re-upsert so events qualify as high-traffic candidates
+        // (sample_causal_chains only explores entities with access_count >= 2).
+        for name in ["Event_A", "Event_B", "Event_C", "Event_D", "Event_E"] {
+            brain.upsert_entity(name, "event").unwrap();
+        }
         let report = reasoning_cycle(&brain).unwrap();
-        // Should find causal chains in the event chain
-        assert!(report.causal_chains_discovered >= 0);
+        // A→B→C→D→E causal chain should be discovered between candidate pairs
+        assert!(
+            report.causal_chains_discovered > 0,
+            "causal graph with qualified candidates should yield chains"
+        );
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -2900,8 +2926,10 @@ mod tests {
 
         // Should handle high branching gracefully
         let report = restructure_ontology(&brain).unwrap();
-        // "connected" connects many concept→concept pairs — might be flagged
-        assert!(report.proposed_changes.len() >= 0);
+        // Whatever is proposed, the report must stay internally consistent
+        for (_, _, jaccard) in &report.synonym_pairs {
+            assert!((0.0..=1.0).contains(jaccard));
+        }
     }
 
     #[test]

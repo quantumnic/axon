@@ -413,7 +413,7 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["query"], "Rust");
-        assert!(json["results"].as_array().unwrap().len() > 0);
+        assert!(!json["results"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]
