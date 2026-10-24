@@ -245,7 +245,9 @@ impl Brain {
         // Note: "source" type is rejected by upsert_entity, so we store keywords
         // as facts on the first real entity instead, or skip if none exist.
         if !extracted.keywords.is_empty() {
-            if let Some(&first_id) = entity_ids.values().next() {
+            // entity_ids may cache 0 for rejected relation endpoints; skip those
+            // (a 0 id would violate the facts.entity_id foreign key).
+            if let Some(&first_id) = entity_ids.values().find(|&&id| id > 0) {
                 for kw in &extracted.keywords {
                     self.upsert_fact(first_id, "keyword", kw, &extracted.source_url)?;
                     fact_count += 1;
@@ -865,6 +867,31 @@ mod tests {
         assert_eq!(e, 2);
         assert_eq!(r, 1);
         assert_eq!(f, 2);
+    }
+
+    #[test]
+    fn test_learn_with_rejected_relation_endpoint() {
+        // A relation to an entity of rejected type caches id 0; facts must
+        // never be attached to it (regression: FOREIGN KEY constraint failed).
+        let mut entities = vec![("Unknown Thing".to_string(), "unknown".to_string())];
+        entities.push(("Entity0".to_string(), "concept".to_string()));
+        let extracted = Extracted {
+            entities,
+            relations: vec![(
+                "Unknown Thing".to_string(),
+                "related_to".to_string(),
+                "Entity0".to_string(),
+            )],
+            keywords: vec!["kw".to_string()],
+            source_url: "https://example.com".to_string(),
+            language: crate::nlp::Language::English,
+        };
+        for _ in 0..64 {
+            let brain = test_brain();
+            let (_, r, f) = brain.learn(&extracted).unwrap();
+            assert_eq!(r, 0);
+            assert_eq!(f, 1);
+        }
     }
 
     #[test]

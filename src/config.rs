@@ -53,7 +53,7 @@ fn default_max_depth() -> usize {
     3
 }
 fn default_user_agent() -> String {
-    "axon/0.2 (knowledge-engine; +https://github.com/redbasecap-buiss/axon)".to_string()
+    "axon/0.2 (knowledge-engine; +https://github.com/quantumnic/axon)".to_string()
 }
 fn default_max_concurrent() -> usize {
     4

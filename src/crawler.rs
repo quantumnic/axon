@@ -8,7 +8,7 @@ use url::Url;
 /// Fetch a URL and extract readable text.
 pub async fn fetch_and_extract(url: &str) -> anyhow::Result<String> {
     let client = reqwest::Client::builder()
-        .user_agent("axon/0.1 (knowledge-engine; +https://github.com/redbasecap-buiss/axon)")
+        .user_agent("axon/0.1 (knowledge-engine; +https://github.com/quantumnic/axon)")
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
@@ -40,7 +40,7 @@ pub async fn fetch_and_extract(url: &str) -> anyhow::Result<String> {
 /// Fetch a URL and return both the raw HTML and extracted text.
 pub async fn fetch_html_and_text(url: &str) -> anyhow::Result<(String, String)> {
     let client = reqwest::Client::builder()
-        .user_agent("axon/0.1 (knowledge-engine; +https://github.com/redbasecap-buiss/axon)")
+        .user_agent("axon/0.1 (knowledge-engine; +https://github.com/quantumnic/axon)")
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
