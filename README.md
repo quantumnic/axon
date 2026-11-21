@@ -1,5 +1,7 @@
 # 🧠 Axon
 
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/redbasecap)
+
 **A tiny brain that never stops learning.**
 
 Axon is a lightweight, continuously self-learning knowledge engine written in pure Rust. It crawls the web, extracts entities and relations, builds a knowledge graph, and answers your questions — all with zero ML frameworks, minimal compute, and a single SQLite file as its brain.
